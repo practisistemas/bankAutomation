@@ -1,0 +1,6 @@
+.env
+sendgrid.env
+bancolombia.log
+geckodriver.log
+dist
+build
