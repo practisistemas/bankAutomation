@@ -1,26 +1,37 @@
-import redis
-from Conexion import connection
-import mysql
-import redis
-import os
-
-from dotenv import load_dotenv
-
-#r = redis.Redis(host='localhost', port=6379,db=0)
-#r.blpop('Hola mundo', 50)
-#r.rpush('transacti', 'Holaaaaa')
-load_dotenv()
-
-try:
-    r = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'),db=os.getenv('REDIS_DB'))
-
-except:
-    print("Hola")
-print("Hola")
-r.set('Stop_hilo', 1)
-#r.lpush("Data" + str(17), 900)
+antiguas=[300.00,100.00,200.00,400.00,400.00]
+nueva=   [500.00,300.00,100.00,200.00,400.00]
 
 
+antiguas_result = []
+for antiguas_item in antiguas:
+    if antiguas_item not in antiguas_result:
+        antiguas_result.append(antiguas_item)
+
+#print(antiguas_result)
+
+nueva_result = []
+for nueva_item in nueva:
+    if nueva_item not in nueva_result:
+        nueva_result.append(nueva_item)
+
+#print(nueva_result)
+
+for item in nueva_result:
+    count_antiguas =antiguas.count(item)
+    count_nueva = nueva.count(item)
+
+    #print(count_antiguas)
+    #print(count_nueva)
+
+    if(count_antiguas==count_nueva):
+        print("El item Existe: ", item)
+    else:
+        resultado=count_nueva-count_antiguas
+        if resultado<=-1:
+            print("Ya existe ")
+        else:
+            print("El item no Existe: ", item)
+            print(resultado)
 
 
 
@@ -29,19 +40,24 @@ r.set('Stop_hilo', 1)
 
 
 
-"""try:
-    MyCursor = connection.cursor()
-    sql2 = "INSERT INTO trabajo( Cuenta, Estado) VALUES ('3434-00', 0) "
-    MyCursor.execute(sql2)
-    connection.commit()
 
-    id = MyCursor.lastrowid
-    com = str(id)
-    print(MyCursor.lastrowid)
-    r.blpop(com, 120)
-except mysql.connector.errors.ProgrammingError as error:
-    connection.rollback()
-except mysql.connector.errors as ey:
-    connection.rollback()
-finally:
-    MyCursor.close()"""
+
+
+
+"""for i in range(5):
+    NoSonIguales = 0
+    Salir = 0
+    for j in range(5):
+        try:
+            nueva[i+j]
+        except IndexError:
+            Salir=1
+            break
+        if Salir==1:
+            break
+        if nueva[i+j]!=antiguas[j]:
+            NoSonIguales  = 1
+            print("insertando"+str(nueva[i+j]))
+            break
+        if Salir ==1:
+            break"""

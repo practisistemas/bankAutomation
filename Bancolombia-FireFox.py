@@ -3,10 +3,11 @@ import logging
 import time
 import threading
 import os
-
-
 import mysql
+import numpy as np
+import decimal
 import selenium
+import redis
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, MoveTargetOutOfBoundsException, WebDriverException, \
     InvalidSessionIdException, NoSuchWindowException, TimeoutException, UnexpectedAlertPresentException
@@ -17,29 +18,21 @@ from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from Conexion import connection
-from Hilos import MantenerSesion, CerrarSesion
+from Hilos import MantenerSesion
 from dotenv import load_dotenv
 from Estados import Estados_trabajos
 from Trabajos import  cola_de_trabajo
 from SendEmail import EnvioCorreo
-import redis
-
 
 
 # load_dotenv = Optiene los resultados de las variables de entorno
 load_dotenv()
-#Configuracion log
-#%(threadName)s - %(processName)s -
-"""logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s',
-                        filename='bancolombia.log',
-                        filemode='a')"""
 
 def main():
     #Configuracion navegador
     options = Options()
     options.headless = False
-    driver = webdriver.Firefox()
+    driver = webdriver.Firefox(options=options)
     driver.maximize_window()
     # Ingresamos URL
     driver.get('https://sucursalempresas.transaccionesbancolombia.com/SVE/control/BoleTransactional.bancolombia')
@@ -100,15 +93,18 @@ def main():
         pass_incorrecta = True
 
     if pass_incorrecta == True:
-        Mensaje= "No se pudo iniciar sesion, datos de ingreso incorrectos, problemas con el servicio de bancolombia o usuario bloqueado, EL SERVICIO QUEDA DETENIDO HASTA NO VALIDAR EL FALLO"
+        Mensaje= "No se pudo iniciar sesion, datos de ingreso incorrectos, problemas con el servicio de bancolombia o usuario bloqueado, <strong> EL SERVICIO SE REINICIARA EN 15 MINUTOS </strong>"
         logging.error(Mensaje)
         EnvioCorreo(Mensaje)
         driver.close()
+        time.sleep(900)
+        main()
     else:
         logging.info("INICIO DE SESION EXITOSO")
 
     #Inicia proceso para acceder al listado de cuentas y transacciones
     try:
+        time.sleep(10)
         try:
             driver.switch_to.frame(0)
             WebDriverWait(driver, 80).until(EC.element_to_be_clickable((By.ID, "el1"))).click()
@@ -134,185 +130,279 @@ def main():
             driver.close()
             main()
 
-
         # Ingresa a la primera cuenta para realizar proceso de extraccion de informacion
         WebDriverWait(driver, 50).until(EC.element_to_be_clickable((By.XPATH, "/html/body/table/tbody/tr/td/div/form[2]/table[1]/tbody/tr[1]/td[3]/a"))).click()
         logging.info("INICIA PROCESO DE VALIDACION Y EXTRACCION DE TRANSACCIONES...")
         time.sleep(3)
 
+        # conexion REDIS
+        try:
+            rx = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'))
+            # Hilo que hace movimientos en la pantalla para evitar cerrra sesion
+            # Variable para romper el hilo
+            # 1. se elimina la variable para evitar problemas de comunicacion
+            rx.delete('Stop_hilo')
+            # 2. se crea la variable
+            rx.set('Stop_hilo', 0)
+        except:
+            logging.error("No se puede establecer una conexión ya que el equipo de destino denegó expresamente dicha conexión.")
+            EnvioCorreo("Redis: No se puede establecer una conexión ya que el equipo de destino denegó expresamente dicha conexión.")
+
+        # Se crea Hilo y se inicializa
+        Mantener_sesion = threading.Thread(name="Mantener-Sesion", target=MantenerSesion, args=(
+        Select, driver, By, logging, NoSuchWindowException, InvalidSessionIdException, WebDriverException, EnvioCorreo,
+        NoSuchElementException, main))
+        Mantener_sesion.start()
+        logging.info("SE INICIA HILO QUE MANTIENE LA SESION ABIERTA")
+        print("Se salio del WHILE")
+
         # Inicia iteraciones con WHILE
         while True:
-            # Consultas todas las solicitudes en la cola de trabajo con ESTADO = 1
-            try:
-                MyCursor = connection.cursor()
-                MyCursor.execute("SELECT * FROM trabajo WHERE estado = 1 ")
-                MyResult = MyCursor.fetchall()
-            finally:
-                MyCursor.close()
+            TransaccionNueva = rx.get('TransaccionNueva')
+            if TransaccionNueva == None:
+                TransaccionNueva=0
+            elif TransaccionNueva == b'0':
+                TransaccionNueva=0
+            elif TransaccionNueva == b'1':
+                TransaccionNueva = 1
 
-        #Cuenta la cantidad de trabajos con ESTADO = 1
-            if(len(MyResult)==0):
-                # conexion REDIS
-                rx = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'))
-                # Variable para romper el hilo
-                # 1. se elimina la variable para evitar problemas de comunicacion
-                rx.delete('Stop_hilo')
-                # 2. se crea la variable
-                rx.set('Stop_hilo', 0)
+            #Cuenta la cantidad de trabajos con ESTADO = 1
+            if(TransaccionNueva==0):
+                 #Variable para validar si la lista desplegable donde se encuentran las cuentas existe o se encuentra en otra ventana
+                ExisteLista=0
 
-                #Hilo que hace movimientos en la pantalla para evitar cerrra sesion
-                Mantener_sesion = threading.Thread(name="Mantener-Sesion", target=MantenerSesion, args=(Select, driver, By, logging, NoSuchWindowException, InvalidSessionIdException, WebDriverException, EnvioCorreo, NoSuchElementException))
-                Mantener_sesion.start()
-                logging.info("SE INICIA HILO QUE MANTIENE LA SESION ABIERTA")
+                try:
+                    driver.find_element(By.NAME, 'accountForDetail')
+                except:
+                    ExisteLista = 1
 
-                while True:
-                    # Consulta el total de solicitudes en la cola de trabajo
-                    try:
-                        connection.autocommit = True
-                        MyCursor = connection.cursor()
-                        MyCursor.execute("SELECT COUNT(Id) FROM trabajo WHERE estado = 1 ")
-                        MyResult4 = MyCursor.fetchone()
-                    finally:
-                        MyCursor.close()
-                    time.sleep(1)
-                    if (MyResult4[0] >= 1):
-                        logging.info("Se encontraron transacciones nuevas")
-                        rx.set('Stop_hilo', 1)
-                        #Rompe el bucle para realizar la condicion
-                        break
-                    else:
-                        #Variable para validar si la lista desplegable donde se encuentran las cuentas existe o se encuentra en otra ventana
-                        ExisteLista=0
-                        try:
-                            driver.find_element(By.NAME, 'accountForDetail').is_displayed()
-                        except selenium.common.exceptions.NoSuchElementException:
-                            ExisteLista = 1
 
-                        if ExisteLista==0:
-                            logging.warning("Esperando por transacciones...")
-                            rx.set('Stop_hilo', 0)
-                        else:
-                            logging.error("Hilo que mantiene la sesion abierta no encontro lista de cuentas, se reinicia el servicio")
-                            rx.set('Stop_hilo', 1)
-                            driver.get(os.getenv('CERRAR_SESION'))
-                            time.sleep(2)
-                            EnvioCorreo("Error: Hilo que mantiene la sesion abierta no encontro lista de cuentas, se reinicia el servicio")
-                            driver.close()
-                            main()
+                if ExisteLista==0:
+                    #print("Esperando por transacciones...")
+                    rx.set('Stop_hilo', 0)
+                else:
+                    logging.error("Hilo que mantiene la sesion abierta no encontro lista de cuentas, se reinicia el servicio")
+                    rx.set('Stop_hilo', 1)
+                    driver.get(os.getenv('CERRAR_SESION'))
+                    time.sleep(10)
+                    EnvioCorreo("Error: Hilo que mantiene la sesion abierta no encontro lista de cuentas, se reinicia el servicio")
+                    driver.close()
+                    main()
 
             else:
+                logging.info("Se encontraron transacciones nuevas")
+                rx.set('Stop_hilo', 1)
+                rx.set('TransaccionNueva',0)
+
+                try:
+                    #global MyCursor0
+                    MyCursor0 = connection.cursor()
+                    #MyCursor0.autocommit = True
+                    MyCursor0.execute("SELECT * FROM trabajo WHERE estado = 1 ")
+                    MyResult = MyCursor0.fetchall()
+                finally:
+                    MyCursor0.close()
+
                 # Ingresar cuenta por cuenta
                 for x in MyResult:
                     id_trabajo = str(x[0])
                     nombre_cuenta = str(x[1])
 
-                    # Despliega la lista donde se encuentran las cuentas
-                    select = Select(driver.find_element(By.NAME, 'accountForDetail'))
-                    Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(x[1])
-                    select.select_by_visible_text(str(Nom_cuenta))
-                    # Espera 2 segundos
-                    time.sleep(2)
-
-                    # Validacion si la cuenta tiene o no data y si tiene procede a extraerla
-                    #Busca "NO EXISTEN REGISTROS QUE CUMPLAN CON EL CRITERIO DE BUSQUEDA SELECCIONADO" para validar si tiene o no tabla con registros
+                    ExisteCuenta=1
                     try:
-                        driver.find_element(By.XPATH, '/html/body/div[43]/table[3]/tbody/tr[4]/td/table/tbody/tr/td[2]').is_displayed()
+                        # Despliega la lista donde se encuentran las cuentas
+                        select = Select(driver.find_element(By.NAME, 'accountForDetail'))
+                        Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(x[1])
+                        select.select_by_visible_text(str(Nom_cuenta))
                     except NoSuchElementException:
-                        link = True
-                    else:
-                        link = False
-
-                    if(link == True):
-                        logging.info("Existen transacciones en la cuenta: " + str(x[1]))
-                        # Extrae informacion de las tablas y numero de columnas y filas
-
-                        cols = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr[1]/td')
-                        rows = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr')
-                        rows1 = 1 + len(rows)
-                        cols1 = len(cols)
-
-                        #Contador para validar si la cuenta no tiene pagos nuevos para procesar
-                        cont = 0
-                        for r in range(1, rows1):
-                            fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
-                            descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
-                            sucursal = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[3]").text
-                            referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[4]").text
-                            referencia_2 = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[5]").text
-                            documento = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[6]").text
-                            valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[7]").text
-
-                            # Valida si el documento viene vacio
-                            documentoFinal = documento.strip()
-                            if(documentoFinal == ''):
-                                documento = 0
-
-                            ## Falta validar que traiga solo numeros
-
-                            #quita las , del valor  y los espacios en blanco al inicio y al final de valor
-                            valorPreliminar = valor.replace(",", "")
-                            valorFinal = valorPreliminar.strip()
+                        print("No existe")
+                        ExisteCuenta = 0
 
 
-                            referencia_1_1 = referencia_1.strip()
-                            referencia_2_2 = referencia_2.strip()
-
-                            #Valida si los datos ya se encuentran registrados
-                            try:
-                                MyCursor = connection.cursor()
-                                sql0 = "SELECT COUNT(Id) FROM tiempo_real WHERE Fecha = %s  AND  Referencia_1 = %s AND  Referencia_2 = %s AND Cuenta = %s AND Valor = %s"
-                                val0 = (fecha, referencia_1_1, referencia_2_2, str(x[1]),valorFinal)
-                                MyCursor.execute(sql0, val0)
-                                Existe = MyCursor.fetchone()
-                            finally:
-                                MyCursor.close()
-
-                            if (Existe[0] >=1):
-                                logging.info("La transaccion ya existe: " +descripcion +"  "+referencia_1_1+"  "+referencia_2_2+ "     "+str(x[1])+"     "+valorFinal)
-                            else:
-                                #Inserta los registros en la base de datos
-                                try:
-                                    MyCursor = connection.cursor()
-                                    sql1 = "INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                                    val1 = (fecha, descripcion, sucursal, referencia_1_1, referencia_2_2, documento, valorFinal, str(x[1]), str(x[0]))
-                                    MyCursor.execute(sql1, val1)
-                                    connection.commit()
-                                    cont += 1
-
-                                except mysql.connector.errors.ProgrammingError as error:
-                                    connection.rollback()
-                                    logging.error("No se insertaron registros de la cuenta "+str(x[1]))
-                                except mysql.connector.errors as eu:
-                                    connection.rollback()
-                                    logging.error(eu)
-                                except AttributeError as ae:
-                                    logging.error(ae)
-                                finally:
-                                    MyCursor.close()
-
-                        # Validacion para registrar que no han habido pagos nuevos con estado 3
-                        if(cont ==0):
-                            #Se actualiza el estado a 3 NO EXISTEN NUEVOS PAGOS
-                            logging.warning("No se registraron pagos nuevos en la cuenta " + str(x[1]))
-                            id_estado = 4
-                            Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
-                            id_transaccion= str(x[0])
-                            cola_de_trabajo(id_transaccion)
+                    if ExisteCuenta ==1:
+                        # Validacion si la cuenta tiene o no data y si tiene procede a extraerla
+                        #Busca "NO EXISTEN REGISTROS QUE CUMPLAN CON EL CRITERIO DE BUSQUEDA SELECCIONADO" para validar si tiene o no tabla con registros
+                        try:
+                            driver.find_element(By.XPATH, '/html/body/div[43]/table[3]/tbody/tr[4]/td/table/tbody/tr/td[2]').is_displayed()
+                        except NoSuchElementException:
+                            link = True
                         else:
-                            #Se actualiza el estado a 1 EXISTEN NUEVOS PAGOS
-                            logging.warning("Se registraron pagos a la cuenta" + str(x[1]))
-                            id_estado = 2
-                            Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
+                            link = False
+
+                        if(link == True):
+                            logging.info("Existen transacciones en la cuenta: " + str(x[1]))
+                            # Extrae informacion de las tablas y numero de columnas y filas
+
+                            cols = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr[1]/td')
+                            rows = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr')
+                            rows1 = 1 + len(rows)
+                            cols1 = len(cols)
+
+                            global nueva
+                            nueva = []
+                            for i in range(1, rows1):
+                                valorPa = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(i) + "]/td[7]").text
+                                valorPreliminar = valorPa.replace(",", "")
+                                valorFinal = valorPreliminar.strip()
+                                nueva.append(valorFinal)
+
+
+                            ### optiene las ultimas 20 transaciones de la cuenta
+                            try:
+                                MyCursor2 = connection.cursor()
+                                sql6 = "SELECT Valor FROM tiempo_real WHERE cuenta= %s  order by id ASC  LIMIT 20 "
+                                val6 = (str(x[1]),)
+                                MyCursor2.execute(sql6, val6)
+                                result_SQL = MyCursor2.fetchall()
+
+                                antiguas_SQL = []
+                                for row in result_SQL:
+                                    antiguas_SQL.append(str(row[0]))
+                            finally:
+                                MyCursor2.close()
+
+                            antiguas_result = []
+                            for antiguas_item in antiguas_SQL:
+                                if antiguas_item not in antiguas_result:
+                                    antiguas_result.append(antiguas_item)
+
+                            nueva_result = []
+                            transacciones_nuevas = []
+                            for nueva_item in nueva:
+                                if nueva_item not in nueva_result:
+                                    nueva_result.append(nueva_item)
+
+                            for item in nueva_result:
+                                count_antiguas = antiguas_SQL.count(item)
+                                count_nueva = nueva.count(item)
+
+                                if (count_antiguas == count_nueva):
+                                    print("El item Existe: ", item)
+                                else:
+                                    resultado = count_nueva - count_antiguas
+                                    if resultado <= -1:
+                                        print("Ya existe ")
+                                    else:
+                                        print("El item no Existe: ", item)
+                                        print(resultado)
+                                        for r in range(resultado):
+                                            transacciones_nuevas.append(item)
+                            print(transacciones_nuevas)
+
+
+                            #Contador para validar si la cuenta no tiene pagos nuevos para procesar
+                            cont = 0
+                            for r in range(1, rows1):
+                                fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
+                                descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
+                                sucursal = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[3]").text
+                                referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[4]").text
+                                referencia_2 = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[5]").text
+                                documento = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[6]").text
+                                valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[7]").text
+
+                                # Valida si el documento viene vacio
+                                documentoFinal = documento.strip()
+                                if(documentoFinal == ''):
+                                    documento = 0
+
+                                ## Falta validar que traiga solo numeros
+
+                                #quita las , del valor  y los espacios en blanco al inicio y al final de valor
+                                valorPreliminar = valor.replace(",", "")
+                                valorFinal = valorPreliminar.strip()
+
+                                referencia_1_1 = referencia_1.strip()
+                                referencia_2_2 = referencia_2.strip()
+
+
+                                
+
+
+
+
+                                #Valida si los datos ya se encuentran registrados
+                                try:
+                                    #global MyCursor1
+                                    MyCursor1 = connection.cursor()
+                                    sql0 = "SELECT COUNT(Id) FROM tiempo_real WHERE Fecha = %s  AND  Referencia_1 = %s AND  Referencia_2 = %s AND Cuenta = %s AND Valor = %s"
+                                    val0 = (fecha, referencia_1_1, referencia_2_2, str(x[1]),valorFinal)
+                                    MyCursor1.execute(sql0, val0)
+                                    Existe = MyCursor1.fetchone()
+                                finally:
+                                    MyCursor1.close()
+
+                                if (Existe[0] >=1):
+                                    logging.info("La transaccion ya existe: " +descripcion +"  "+referencia_1_1+"  "+referencia_2_2+ "     "+str(x[1])+"     "+valorFinal)
+                                else:
+                                    #Inserta los registros en la base de datos
+                                    try:
+                                        #global MyCursor3
+                                        MyCursor3 = connection.cursor()
+                                        sql1 = "INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                                        val1 = (fecha, descripcion, sucursal, referencia_1_1, referencia_2_2, documento, valorFinal, str(x[1]), str(x[0]))
+                                        MyCursor3.execute(sql1, val1)
+                                        connection.commit()
+                                        cont += 1
+
+                                    except mysql.connector.errors.ProgrammingError as error:
+                                        connection.rollback()
+                                        logging.error("No se insertaron registros de la cuenta "+str(x[1]))
+                                    except mysql.connector.errors as eu:
+                                        connection.rollback()
+                                        logging.error(eu)
+                                    except AttributeError as ae:
+                                        logging.error(ae)
+                                    finally:
+                                        MyCursor3.close()
+
+
+
+                            # Validacion para registrar que no han habido pagos nuevos con estado 3
+                            if(cont ==0):
+                                #Se actualiza el estado a 3 NO EXISTEN NUEVOS PAGOS
+                                logging.warning("No se registraron pagos nuevos en la cuenta " + str(x[1]))
+                                id_estado = 4
+                                Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
+                                id_transaccion= str(x[0])
+                                cola_de_trabajo(id_transaccion)
+                            else:
+                                #Se actualiza el estado a 1 EXISTEN NUEVOS PAGOS
+                                logging.warning("Se registraron pagos a la cuenta" + str(x[1]))
+                                id_estado = 2
+                                Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
+                                id_transaccion = str(x[0])
+                                cola_de_trabajo(id_transaccion)
+
+                        else:
+                            # Actualiza el estado del trabajo a ESTADO = 2 para no ser procesado de nuevo
+                            logging.warning("No existen registros que cumplan con el criterio de búsqueda seleccionado - " + str(x[1]))
+                            id_estado = 3
+                            Estados_trabajos(connection,logging,mysql,id_trabajo,nombre_cuenta,id_estado)
                             id_transaccion = str(x[0])
                             cola_de_trabajo(id_transaccion)
 
+                        # Se termina de realizar la extraccion de la informacion y se reaunda el Hilo
+                        StatusHilo = Mantener_sesion.is_alive()
+                        print("Status hilo: "+ str(StatusHilo))
+                        if  StatusHilo == False:
+                            Mantener_sesion = threading.Thread(name="Mantener-Sesion", target=MantenerSesion, args=(
+                                Select, driver, By, logging, NoSuchWindowException, InvalidSessionIdException,
+                                WebDriverException, EnvioCorreo,
+                                NoSuchElementException))
+                            Mantener_sesion.start()
+                            rx.set('Stop_hilo', 0)
                     else:
-                        # Actualiza el estado del trabajo a ESTADO = 2 para no ser procesado de nuevo
-                        logging.warning("No existen registros que cumplan con el criterio de búsqueda seleccionado - " + str(x[1]))
-                        id_estado = 3
-                        Estados_trabajos(connection,logging,mysql,id_trabajo,nombre_cuenta,id_estado)
+                        logging.warning("El numero de cuenta no existe - " + str(x[1]))
+                        id_estado = 6
+                        Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
                         id_transaccion = str(x[0])
                         cola_de_trabajo(id_transaccion)
+                        EnvioCorreo("El numero de cuenta no existe - " + str(x[1]))
+
+
+
+
 
     except NoSuchElementException as NSEE:
         logging.error("Problemas al cargar el sitio principal, se reinicia el servicio: "+str(NSEE))
