@@ -283,15 +283,72 @@ def main():
                                     if resultado <= -1:
                                         print("Ya existe ")
                                     else:
-                                        print("El item no Existe: ", item)
-                                        print(resultado)
+                                        #print("El item no Existe: ", item)
                                         for r in range(resultado):
                                             transacciones_nuevas.append(item)
-                            print(transacciones_nuevas)
+
+                            for tr_nuevas in range(len(transacciones_nuevas)):
+                                total_tr_nuevas = tr_nuevas + 1
+                                # Contador para validar si la cuenta no tiene pagos nuevos para procesar
+                                cont = 0
+                                for r in range(1, rows1):
+                                    fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
+                                    descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
+                                    sucursal = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[3]").text
+                                    referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[4]").text
+                                    referencia_2 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[5]").text
+                                    documento = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[6]").text
+                                    valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[7]").text
+
+                                    # Valida si el documento viene vacio
+                                    documentoFinal = documento.strip()
+                                    if (documentoFinal == ''):
+                                        documento = 0
+
+                                    # quita las , del valor  y los espacios en blanco al inicio y al final de valor
+                                    valorPreliminar = valor.replace(",", "")
+                                    valorFinal = valorPreliminar.strip()
+
+                                    referencia_1_1 = referencia_1.strip()
+                                    referencia_2_2 = referencia_2.strip()
+
+                                    if valorFinal == transacciones_nuevas[tr_nuevas]:
+                                        print("################## Se encontro el valor ###########################")
+                                        # Inserta los registros en la base de datos
+                                        try:
+                                            # global MyCursor3
+                                            MyCursor3 = connection.cursor()
+                                            sql1 = "INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                                            val1 = (
+                                            fecha, descripcion, sucursal, referencia_1_1, referencia_2_2, documento,
+                                            valorFinal, str(x[1]), str(x[0]))
+                                            MyCursor3.execute(sql1, val1)
+                                            connection.commit()
+                                            cont += 1
+
+                                        except mysql.connector.errors.ProgrammingError as error:
+                                            connection.rollback()
+                                            logging.error("No se insertaron registros de la cuenta " + str(x[1]))
+                                        except mysql.connector.errors as eu:
+                                            connection.rollback()
+                                            logging.error(eu)
+                                        except AttributeError as ae:
+                                            logging.error(ae)
+                                        finally:
+                                            MyCursor3.close()
+                                        break
+
+                            if total_tr_nuevas == len(transacciones_nuevas):
+                                print("Sale")
+
+
+
+
+
 
 
                             #Contador para validar si la cuenta no tiene pagos nuevos para procesar
-                            cont = 0
+                            """cont = 0
                             for r in range(1, rows1):
                                 fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
                                 descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
@@ -314,12 +371,6 @@ def main():
 
                                 referencia_1_1 = referencia_1.strip()
                                 referencia_2_2 = referencia_2.strip()
-
-
-                                
-
-
-
 
                                 #Valida si los datos ya se encuentran registrados
                                 try:
@@ -354,7 +405,7 @@ def main():
                                     except AttributeError as ae:
                                         logging.error(ae)
                                     finally:
-                                        MyCursor3.close()
+                                        MyCursor3.close()"""
 
 
 
