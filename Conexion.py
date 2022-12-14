@@ -18,6 +18,7 @@ try:
         user=os.getenv('DB_USER'),
         password=os.getenv('BD_PASSWORD'),
         db=os.getenv('DB'),
+        pool_size=5,
     )
 
     if connection.is_connected():

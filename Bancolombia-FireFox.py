@@ -5,6 +5,7 @@ import threading
 import os
 import mysql
 import numpy as np
+import pandas as pd
 import decimal
 import selenium
 import redis
@@ -27,6 +28,9 @@ from SendEmail import EnvioCorreo
 
 # load_dotenv = Optiene los resultados de las variables de entorno
 load_dotenv()
+
+#Tabla
+df = pd.DataFrame()
 
 def main():
     #Configuracion navegador
@@ -176,9 +180,8 @@ def main():
                 except:
                     ExisteLista = 1
 
-
+                #Valida si se encuentra la listra desblegable donde se seleccionan las cuentas
                 if ExisteLista==0:
-                    #print("Esperando por transacciones...")
                     rx.set('Stop_hilo', 0)
                 else:
                     logging.error("Hilo que mantiene la sesion abierta no encontro lista de cuentas, se reinicia el servicio")
@@ -215,7 +218,6 @@ def main():
                         Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(x[1])
                         select.select_by_visible_text(str(Nom_cuenta))
                     except NoSuchElementException:
-                        print("No existe")
                         ExisteCuenta = 0
 
 
@@ -232,21 +234,45 @@ def main():
                         if(link == True):
                             logging.info("Existen transacciones en la cuenta: " + str(x[1]))
                             # Extrae informacion de las tablas y numero de columnas y filas
-
                             cols = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr[1]/td')
                             rows = driver.find_elements(By.XPATH, '/html/body/div[43]/p[2]/table[1]/tbody/tr')
                             rows1 = 1 + len(rows)
-                            cols1 = len(cols)
 
-                            global nueva
-                            nueva = []
-                            for i in range(1, rows1):
-                                valorPa = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(i) + "]/td[7]").text
-                                valorPreliminar = valorPa.replace(",", "")
+                            #Crea tabla para almacenar los registros
+                            df = pd.DataFrame(columns=['fecha', 'descripcion', 'sucursal','referencia_1','referencia_2','documento','valor'])
+                            for ro in range(1, rows1):
+                                fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[1]").text
+                                descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[2]").text
+                                sucursal = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[3]").text
+                                referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[4]").text
+                                referencia_2 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[5]").text
+                                documento = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[6]").text
+                                valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(ro) + "]/td[7]").text
+
+                                # Valida si el documento viene vacio
+                                documentoFinal = documento.strip()
+                                if (documentoFinal == ''):
+                                    documento = 0
+
+                                # quita las , del valor  y los espacios en blanco al inicio y al final de valor
+                                valorPreliminar = valor.replace(",", "")
                                 valorFinal = valorPreliminar.strip()
-                                nueva.append(valorFinal)
 
+                                referencia_1_1 = referencia_1.strip()
+                                referencia_2_2 = referencia_2.strip()
 
+                                #LLenar DataFrame
+                                d = {'fecha':fecha,
+                                     'descripcion':descripcion,
+                                     'sucursal':sucursal,
+                                     'referencia_1':referencia_1_1,
+                                     'referencia_2':referencia_2_2,
+                                     'documento':documento,
+                                     'valor':valorFinal}
+
+                                df = pd.concat([df, pd.DataFrame(d, index=[0])], ignore_index=True)
+
+                            # Crea tabla para almacenar los registros
                             ### optiene las ultimas 20 transaciones de la cuenta
                             try:
                                 MyCursor2 = connection.cursor()
@@ -254,159 +280,74 @@ def main():
                                 val6 = (str(x[1]),)
                                 MyCursor2.execute(sql6, val6)
                                 result_SQL = MyCursor2.fetchall()
-
                                 antiguas_SQL = []
                                 for row in result_SQL:
                                     antiguas_SQL.append(str(row[0]))
                             finally:
                                 MyCursor2.close()
 
-                            antiguas_result = []
-                            for antiguas_item in antiguas_SQL:
-                                if antiguas_item not in antiguas_result:
-                                    antiguas_result.append(antiguas_item)
+                            global nueva
+                            nueva = df["valor"].to_numpy()
 
-                            nueva_result = []
-                            transacciones_nuevas = []
-                            for nueva_item in nueva:
-                                if nueva_item not in nueva_result:
-                                    nueva_result.append(nueva_item)
-
-                            for item in nueva_result:
-                                count_antiguas = antiguas_SQL.count(item)
-                                count_nueva = nueva.count(item)
-
-                                if (count_antiguas == count_nueva):
-                                    print("El item Existe: ", item)
-                                else:
-                                    resultado = count_nueva - count_antiguas
-                                    if resultado <= -1:
-                                        print("Ya existe ")
-                                    else:
-                                        #print("El item no Existe: ", item)
-                                        for r in range(resultado):
-                                            transacciones_nuevas.append(item)
-
-                            for tr_nuevas in range(len(transacciones_nuevas)):
-                                total_tr_nuevas = tr_nuevas + 1
-                                # Contador para validar si la cuenta no tiene pagos nuevos para procesar
-                                cont = 0
-                                for r in range(1, rows1):
-                                    fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
-                                    descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
-                                    sucursal = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[3]").text
-                                    referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[4]").text
-                                    referencia_2 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[5]").text
-                                    documento = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[6]").text
-                                    valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[7]").text
-
-                                    # Valida si el documento viene vacio
-                                    documentoFinal = documento.strip()
-                                    if (documentoFinal == ''):
-                                        documento = 0
-
-                                    # quita las , del valor  y los espacios en blanco al inicio y al final de valor
-                                    valorPreliminar = valor.replace(",", "")
-                                    valorFinal = valorPreliminar.strip()
-
-                                    referencia_1_1 = referencia_1.strip()
-                                    referencia_2_2 = referencia_2.strip()
-
-                                    if valorFinal == transacciones_nuevas[tr_nuevas]:
-                                        print("################## Se encontro el valor ###########################")
-                                        # Inserta los registros en la base de datos
+                            guardar = 0
+                            pos = []
+                            cont = 0
+                            if len(antiguas_SQL) ==0:
+                                guardar += 1
+                                for k in range(len(nueva)):
+                                    pos.append(k)
+                            else:
+                                for i in range(len(antiguas_SQL)):
+                                    NoSonIguales = 0
+                                    Salir = 0
+                                    for j in range(len(antiguas_SQL)):
                                         try:
-                                            # global MyCursor3
-                                            MyCursor3 = connection.cursor()
-                                            sql1 = "INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                                            val1 = (
-                                            fecha, descripcion, sucursal, referencia_1_1, referencia_2_2, documento,
-                                            valorFinal, str(x[1]), str(x[0]))
-                                            MyCursor3.execute(sql1, val1)
-                                            connection.commit()
-                                            cont += 1
+                                            nueva[i + j]
+                                        except IndexError:
+                                            Salir = 1
+                                            break
+                                        if Salir == 1:
+                                            break
+                                        if nueva[i + j] != antiguas_SQL[j]:
+                                            NoSonIguales = 1
+                                            print("insertando" + str(nueva[i + j]))
+                                            pos.append(i+j)
+                                            guardar+= 1
+                                            break
 
-                                        except mysql.connector.errors.ProgrammingError as error:
-                                            connection.rollback()
-                                            logging.error("No se insertaron registros de la cuenta " + str(x[1]))
-                                        except mysql.connector.errors as eu:
-                                            connection.rollback()
-                                            logging.error(eu)
-                                        except AttributeError as ae:
-                                            logging.error(ae)
-                                        finally:
-                                            MyCursor3.close()
-                                        break
+                                        if Salir == 1:
+                                            break
 
-                            if total_tr_nuevas == len(transacciones_nuevas):
-                                print("Sale")
-
-
-
-
-
-
-
-                            #Contador para validar si la cuenta no tiene pagos nuevos para procesar
-                            """cont = 0
-                            for r in range(1, rows1):
-                                fecha = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[1]").text
-                                descripcion = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[2]").text
-                                sucursal = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[3]").text
-                                referencia_1 = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[4]").text
-                                referencia_2 = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[5]").text
-                                documento = driver.find_element(By.XPATH, "/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[6]").text
-                                valor = driver.find_element(By.XPATH,"/html/body/div[43]/p[2]/table[1]/tbody/tr[" + str(r) + "]/td[7]").text
-
-                                # Valida si el documento viene vacio
-                                documentoFinal = documento.strip()
-                                if(documentoFinal == ''):
-                                    documento = 0
-
-                                ## Falta validar que traiga solo numeros
-
-                                #quita las , del valor  y los espacios en blanco al inicio y al final de valor
-                                valorPreliminar = valor.replace(",", "")
-                                valorFinal = valorPreliminar.strip()
-
-                                referencia_1_1 = referencia_1.strip()
-                                referencia_2_2 = referencia_2.strip()
-
-                                #Valida si los datos ya se encuentran registrados
+                            print(pos)
+                            # Inserta los registros en la base de datos
+                            if guardar >= 1:
                                 try:
-                                    #global MyCursor1
-                                    MyCursor1 = connection.cursor()
-                                    sql0 = "SELECT COUNT(Id) FROM tiempo_real WHERE Fecha = %s  AND  Referencia_1 = %s AND  Referencia_2 = %s AND Cuenta = %s AND Valor = %s"
-                                    val0 = (fecha, referencia_1_1, referencia_2_2, str(x[1]),valorFinal)
-                                    MyCursor1.execute(sql0, val0)
-                                    Existe = MyCursor1.fetchone()
+                                    val1 = []
+                                    MyCursor3 = connection.cursor()
+                                    sql1 = """INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                                    #for i in range(len(df)):
+                                    for i in pos:
+                                        val1.append((
+                                            df.loc[i, "fecha"], df.loc[i, "descripcion"], df.loc[i, "sucursal"], df.loc[i, "referencia_1"], df.loc[i, "referencia_2"], df.loc[i, "documento"],
+                                            df.loc[i, "valor"], str(x[1]), str(x[0])))
+                                    MyCursor3.executemany(sql1, val1)
+
+                                    connection.commit()
+                                    cont += 1
+
+                                except mysql.connector.errors.ProgrammingError as error:
+                                    connection.rollback()
+                                    logging.error("No se insertaron registros de la cuenta " + str(x[1]))
+                                except mysql.connector.errors as eu:
+                                    connection.rollback()
+                                    logging.error(eu)
+                                except AttributeError as ae:
+                                    logging.error(ae)
                                 finally:
-                                    MyCursor1.close()
-
-                                if (Existe[0] >=1):
-                                    logging.info("La transaccion ya existe: " +descripcion +"  "+referencia_1_1+"  "+referencia_2_2+ "     "+str(x[1])+"     "+valorFinal)
-                                else:
-                                    #Inserta los registros en la base de datos
-                                    try:
-                                        #global MyCursor3
-                                        MyCursor3 = connection.cursor()
-                                        sql1 = "INSERT INTO tiempo_real(Fecha, Descripcion, Sucursal_canal, Referencia_1, Referencia_2, Documento, Valor, Cuenta, Id_trabajo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                                        val1 = (fecha, descripcion, sucursal, referencia_1_1, referencia_2_2, documento, valorFinal, str(x[1]), str(x[0]))
-                                        MyCursor3.execute(sql1, val1)
-                                        connection.commit()
-                                        cont += 1
-
-                                    except mysql.connector.errors.ProgrammingError as error:
-                                        connection.rollback()
-                                        logging.error("No se insertaron registros de la cuenta "+str(x[1]))
-                                    except mysql.connector.errors as eu:
-                                        connection.rollback()
-                                        logging.error(eu)
-                                    except AttributeError as ae:
-                                        logging.error(ae)
-                                    finally:
-                                        MyCursor3.close()"""
-
+                                    MyCursor3.close()
+                                    #break
+                            else:
+                                logging.info("No se encontraron transacciones nuevas")
 
 
                             # Validacion para registrar que no han habido pagos nuevos con estado 3
@@ -451,10 +392,6 @@ def main():
                         cola_de_trabajo(id_transaccion)
                         EnvioCorreo("El numero de cuenta no existe - " + str(x[1]))
 
-
-
-
-
     except NoSuchElementException as NSEE:
         logging.error("Problemas al cargar el sitio principal, se reinicia el servicio: "+str(NSEE))
         driver.get(os.getenv('CERRAR_SESION'))
@@ -462,7 +399,6 @@ def main():
         EnvioCorreo("Problemas al cargar el sitio, SE REINICIA EL SERVICIO")
         driver.close()
         main()
-
 
     except MoveTargetOutOfBoundsException:
         logging.error("Problemas al desplegar el menu")
@@ -479,8 +415,6 @@ def main():
     except InvalidSessionIdException as IE:
         logging.error("Se detuvo el hilo de sesion inesperadamente  " + str(IE))
         rx.set('Stop_hilo', 1)
-
-
 
 
 if __name__ =="__main__":
