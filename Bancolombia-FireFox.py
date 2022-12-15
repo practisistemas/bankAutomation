@@ -285,9 +285,9 @@ def main():
                                     antiguas_SQL.append(str(row[0]))
                             finally:
                                 MyCursor2.close()
-
                             global nueva
-                            nueva = df["valor"].to_numpy()
+                            #nueva = df["valor"].to_numpy()
+                            nueva = list(df["valor"])
 
                             guardar = 0
                             pos = []
@@ -296,11 +296,15 @@ def main():
                                 guardar += 1
                                 for k in range(len(nueva)):
                                     pos.append(k)
+                                print(pos)
                             else:
+
+                                #Valida nuevas transaxxiones
                                 for i in range(len(antiguas_SQL)):
                                     NoSonIguales = 0
                                     Salir = 0
                                     for j in range(len(antiguas_SQL)):
+                                        print(i, " ", j)
                                         try:
                                             nueva[i + j]
                                         except IndexError:
@@ -310,13 +314,14 @@ def main():
                                             break
                                         if nueva[i + j] != antiguas_SQL[j]:
                                             NoSonIguales = 1
-                                            print("insertando" + str(nueva[i + j]))
-                                            pos.append(i+j)
-                                            guardar+= 1
                                             break
 
                                         if Salir == 1:
                                             break
+                                    if Salir == 1:
+                                        break
+                                    if NoSonIguales == 0:
+                                        break
 
                             print(pos)
                             # Inserta los registros en la base de datos
