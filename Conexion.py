@@ -30,9 +30,9 @@ try:
         #print("Conectado a la base de datos: {}".format(row))
         logging.info("CONEXION EXITOSA.")
 except Error as ex:
-    Mensaje = "Error durante la conexión a base de datos: {}".format(ex)
+    Mensaje = "Error durante la conexión a base de datos " + ex
     EnvioCorreo(Mensaje)
-    logging.error("Error durante la conexión a base de datos: {}".format(ex))
+    logging.error("Error durante la conexión a base de datos " + ex)
 
 finally:
     if connection.is_connected():

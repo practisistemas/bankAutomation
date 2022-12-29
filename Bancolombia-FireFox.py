@@ -218,7 +218,7 @@ def main():
                     driver.find_element(By.NAME, 'accountList')
                 except:
                     ExisteLista = 1
-                #Valida si se encuentra la listra desblegable donde se seleccionan las cuentas
+                #Valida si se encuentra la lista desblegable donde se seleccionan las cuentas
                 if ExisteLista==0:
                     rx.set('Stop_hilo', 0)
 
@@ -244,15 +244,14 @@ def main():
                 logging.info("Se encontraron transacciones nuevas")
                 rx.set('Stop_hilo', 1)
                 rx.set('TransaccionNueva',0)
-
                 try:
                     global MyCursor0
                     MyCursor0 = connection.cursor()
                     #MyCursor0.autocommit = True
                     MyCursor0.execute("SELECT * FROM trabajo WHERE estado = 1 ")
                     MyResult = MyCursor0.fetchall()
-
                 except mysql.connector.Error as error:
+                    logging.error(error)
                     print(f"Error: {error}")
                 finally:
                     MyCursor0.close()
@@ -261,16 +260,16 @@ def main():
                 for x in MyResult:
                     id_trabajo = str(x[0])
                     nombre_cuenta = str(x[1])
-
                     ExisteCuenta=1
                     try:
                         # Despliega la lista donde se encuentran las cuentas
                         select = Select(driver.find_element(By.NAME, 'accountList'))
-                        Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(x[1])
+                        Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(nombre_cuenta)
                         select.select_by_visible_text(str(Nom_cuenta))
                     except NoSuchElementException:
                         ExisteCuenta = 0
-
+                    except:
+                        ExisteCuenta = 0
 
                     if ExisteCuenta ==1:
                         # Validacion si la cuenta tiene o no data y si tiene procede a extraerla
@@ -283,11 +282,16 @@ def main():
                             link = False
 
                         if(link == True):
-                            logging.info("Existen transacciones en la cuenta: " + str(x[1]))
+                            logging.info("Existen transacciones en la cuenta: " + str(nombre_cuenta))
                             # Extrae informacion de las tablas y numero de columnas y filas
                             cols = driver.find_elements(By.XPATH, '/html/body/table/tbody/tr/td/div/form[3]/table[2]/tbody/tr[4]/td')
-                            rows = driver.find_elements(By.XPATH, '/html/body/table/tbody/tr/td/div/form[3]/table[2]/tbody/tr')
-                            rows1 = len(rows) - 1
+                            #rows = driver.find_elements(By.XPATH, '/html/body/table/tbody/tr/td/div/form[3]/table[2]/tbody/tr')
+                            rows = driver.find_elements(By.XPATH,'/html/body/table/tbody/tr/td/div/form[3]/table[2]/tbody/tr[4]/td/table/tbody/tr')
+
+                            rows1 = 1 + len(rows)
+
+                            logging.info("Total de Filas" + str(rows1))
+
                             #Crea tabla para almacenar los registros
                             df = pd.DataFrame(columns=['hora','fecha', 'fecha_aplicacion', 'correccion','descripcion','documento','referencia','oficina','saldo_canje','valor'])
                             for ro in range(1, rows1):
@@ -335,19 +339,22 @@ def main():
                                          'saldo_canje': saldoCanjeFinal,
                                          'valor': valorFinal}
                                     df = pd.concat([df, pd.DataFrame(d, index=[0])], ignore_index=True)
+                                else:
+                                    print("Transacciones descartadas ")
                             logging.info(df)
 
                             # Crea tabla para almacenar los registros
                             ### optiene las ultimas 20 transaciones de la cuenta
-                            today = date.today()
+                            dia = date.today()
                             global  result_SQL
                             try:
                                 MyCursor2 = connection.cursor()
                                 sql6 = "SELECT Hora FROM tiempo_real WHERE Fecha= %s AND Cuenta = %s  ORDER BY Id DESC LIMIT 1"
-                                val6 = (today, str(x[1]))
+                                val6 = (dia, str(nombre_cuenta))
                                 MyCursor2.execute(sql6, val6)
                                 result_SQL = MyCursor2.fetchone()
                             except mysql.connector.Error as error:
+                                logging.error(error)
                                 print(f"Error: {error}")
                             finally:
                                 MyCursor2.close()
@@ -357,15 +364,26 @@ def main():
                             cont = 0
                             if result_SQL == None:
                                 for k in range(len(df["valor"])):
-                                    pos.append(k)
-                                    guardar += 1
+                                    today = date.today()
+                                    d1 = today.strftime("%Y/%m/%d")
+                                    if str(df.loc[k, "fecha"]).strip() == str(d1).strip():
+                                        pos.append(k)
+                                        guardar += 1
+                                        print(k)
                             else:
-                                for k in df["hora"]:
+                                #for k in df["hora"]:
+                                for k, y in zip(df["hora"], df["fecha"]):
                                     result = re.sub('[^0-9:]', '', k)
                                     hora1 = datetime.strptime(result, '%H:%M:%S').time()
                                     hora2 = datetime.strptime(str(result_SQL[0]), '%H:%M:%S').time()
 
-                                    if  hora1 > hora2:
+                                    today = date.today()
+                                    d1 = today.strftime("%Y/%m/%d")
+
+                                    print("Fecha 1: ", str(y).strip())
+                                    print("Fecha 2: ", str(d1).strip())
+
+                                    if  hora1 > hora2 and str(y).strip() == str(d1).strip():
                                         guardar += 1
                                         pos.append(k)
                             logging.info(pos)
@@ -380,14 +398,14 @@ def main():
                                     for i in range(tamano, -1, -1):
                                         val1.append((
                                             df.loc[i, "hora"], df.loc[i, "fecha"], df.loc[i, "fecha_aplicacion"], df.loc[i, "correccion"], df.loc[i, "descripcion"], df.loc[i, "documento"], df.loc[i, "referencia"],
-                                            df.loc[i, "oficina"], df.loc[i, "saldo_canje"], df.loc[i, "valor"], str(x[1]), str(x[0])))
+                                            df.loc[i, "oficina"], df.loc[i, "saldo_canje"], df.loc[i, "valor"], str(nombre_cuenta), str(id_trabajo)))
                                     MyCursor3.executemany(sql1, val1)
                                     connection.commit()
                                     cont += 1
 
                                 except mysql.connector.errors.ProgrammingError as error:
                                     connection.rollback()
-                                    logging.error("No se insertaron registros de la cuenta " + str(x[1]))
+                                    logging.error("No se insertaron registros de la cuenta " + str(nombre_cuenta))
                                 except mysql.connector.errors as eu:
                                     connection.rollback()
                                     logging.error("rollback"+eu)
@@ -402,17 +420,17 @@ def main():
                             # Validacion para registrar que no han habido pagos nuevos con estado 3
                             if(cont ==0):
                                 #Se actualiza el estado a 3 NO EXISTEN NUEVOS PAGOS
-                                logging.warning("No se registraron pagos nuevos en la cuenta " + str(x[1]))
+                                logging.warning("No se registraron pagos nuevos en la cuenta " + str(nombre_cuenta))
                                 id_estado = 4
                                 Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
-                                id_transaccion= str(x[0])
+                                id_transaccion= str(id_trabajo)
                                 cola_de_trabajo(id_transaccion)
                             else:
                                 #Se actualiza el estado a 1 EXISTEN NUEVOS PAGOS
-                                logging.warning("Se registraron pagos a la cuenta" + str(x[1]))
+                                logging.warning("Se registraron pagos a la cuenta" + str(nombre_cuenta))
                                 id_estado = 2
                                 Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
-                                id_transaccion = str(x[0])
+                                id_transaccion = str(id_trabajo)
                                 cola_de_trabajo(id_transaccion)
 
                         else:
@@ -420,7 +438,7 @@ def main():
                             logging.warning("No existen registros que cumplan con el criterio de búsqueda seleccionado - " + str(x[1]))
                             id_estado = 3
                             Estados_trabajos(connection,logging,mysql,id_trabajo,nombre_cuenta,id_estado)
-                            id_transaccion = str(x[0])
+                            id_transaccion = str(id_trabajo)
                             cola_de_trabajo(id_transaccion)
 
                         # Se termina de realizar la extraccion de la informacion y se reaunda el Hilo
@@ -438,12 +456,12 @@ def main():
                         ruta = str(os.getcwd()) + "/Screenshot/"
                         driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
 
-                        logging.warning("El numero de cuenta no existe - " + str(x[1]))
+                        logging.warning("El numero de cuenta no existe - " + str(nombre_cuenta))
                         id_estado = 6
                         Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
                         id_transaccion = str(x[0])
                         cola_de_trabajo(id_transaccion)
-                        EnvioCorreo("El numero de cuenta no existe - " + str(x[1]), ruta,folio_number)
+                        EnvioCorreo("El numero de cuenta no existe - " + str(nombre_cuenta), ruta,folio_number)
                         rx.set('Stop_hilo', 0)
 
     except NoSuchElementException as NSEE:
@@ -459,6 +477,7 @@ def main():
         driver.get(os.getenv('CERRAR_SESION'))
         time.sleep(2)
         EnvioCorreo("Problemas al cargar el sitio, SE REINICIA EL SERVICIO", ruta,folio_number)
+        rx.set('Stop_hilo', 2)
         driver.close()
         main()
 
@@ -467,6 +486,7 @@ def main():
         time.sleep(3)
         driver.switch_to.frame(0)
         driver.find_element(By.ID, 'el15').click()
+        rx.set('Stop_hilo', 2)
         driver.close()
 
     except WebDriverException as WD:
@@ -476,7 +496,7 @@ def main():
 
     except InvalidSessionIdException as IE:
         logging.error("Se detuvo el hilo de sesion inesperadamente  " + str(IE))
-        rx.set('Stop_hilo', 1)
+        rx.set('Stop_hilo', 0)
 
 if __name__ =="__main__":
     main()

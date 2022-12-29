@@ -1,6 +1,24 @@
 from datetime import datetime, timedelta
 from datetime import date
 
+
+lista_1 = [1, 2, 3]
+lista_2 = ['a', 'b', 'c']
+
+for x, y in zip(lista_1, lista_2):
+    print(x, y)
+dia = date.today()
+print(dia)
+
+today = date.today()
+d1 = today.strftime("%Y/%m/%d")
+print(d1)
+
+
+
+
+
+
 hoy = date.today()
 hora_actual = datetime.now()
 print(hoy)
