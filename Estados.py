@@ -1,6 +1,9 @@
 
 def Estados_trabajos(connection,logging,mysql,id_trabajo,nombre_cuenta, id_estado):
     try:
+
+        if connection.is_connected():
+            connection.reconnect()
         MyCursor = connection.cursor()
         sql5 = "UPDATE trabajo SET Estado = %s WHERE Id = %s "
         val5 = (id_estado,id_trabajo)

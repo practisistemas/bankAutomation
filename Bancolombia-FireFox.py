@@ -4,12 +4,11 @@ import time
 import threading
 import os
 import mysql
-import numpy as np
 import pandas as pd
-import decimal
 import selenium
 import redis
 import re
+import urllib3
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, MoveTargetOutOfBoundsException, WebDriverException, \
@@ -26,8 +25,10 @@ from dotenv import load_dotenv
 from Estados import Estados_trabajos
 from Trabajos import  cola_de_trabajo
 from SendEmail import EnvioCorreo
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import date
+from ConexionRedis import ConexRedis
+
 
 # load_dotenv = Optiene los resultados de las variables de entorno
 load_dotenv()
@@ -44,6 +45,8 @@ def main():
     # Ingresamos URL
     driver.get('https://sucursalempresas.transaccionesbancolombia.com/SVE/control/BoleTransactional.bancolombia')
     driver.set_window_size(1000, 800)
+    # Conexion REDIS
+    rx = ConexRedis.ConRedis(logging, EnvioCorreo, driver)
 
     try:
         # Digita NIT
@@ -72,49 +75,27 @@ def main():
         WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.NAME, 'Submit'))).click()
 
     except TimeoutException as toe:
-        # Concatena hora y fecha para  Tomar captura de pantalla
-        hoy = date.today()
-        hora_actual = datetime.now()
-        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-            hora_actual.second)+str(".png")
-        ruta = str(os.getcwd()) + "/Screenshot/"
-        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
 
         Mensaje = "Tiempo de respuesta agotado en la ventana de login del servico - Bancolombia Empresas "
+        EnvioCorreo(Mensaje, driver)
         logging.error(Mensaje + str(toe))
         driver.close()
-        EnvioCorreo(Mensaje, ruta,folio_number)
         logging.warning("Se reinicio el servico...")
         main()
 
     except NoSuchWindowException as nswe:
-        # Concatena hora y fecha para  Tomar captura de pantalla
-        hoy = date.today()
-        hora_actual = datetime.now()
-        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-            hora_actual.second)+str(".png")
-        ruta = str(os.getcwd()) + "/Screenshot/"
-        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
         Mensaje = "Se cerro el navegador inesperadamente, se encontraba en la ventana de login "
+        EnvioCorreo(Mensaje, driver)
         logging.error(Mensaje + str(nswe))
         driver.close()
-        EnvioCorreo(Mensaje, ruta,folio_number)
         logging.warning("Se reinicio el servico...")
         main()
 
     except UnexpectedAlertPresentException as uape:
-        # Concatena hora y fecha para  Tomar captura de pantalla
-        hoy = date.today()
-        hora_actual = datetime.now()
-        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-            hora_actual.second)+str(".png")
-        ruta = str(os.getcwd()) + "/Screenshot/"
-        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
         Mensaje = "La información ingresada es incorrecta falta completar algun campo - " +str(uape)
+        EnvioCorreo(Mensaje, driver)
         logging.error(Mensaje)
-        EnvioCorreo(Mensaje, ruta,folio_number)
+
 
     # Valida si aparece ventana emergente notificando por problema de inicio de sesion o usuario bloqueado
     try:
@@ -125,17 +106,9 @@ def main():
         pass_incorrecta = True
 
     if pass_incorrecta == True:
-        # Concatena hora y fecha para  Tomar captura de pantalla
-        hoy = date.today()
-        hora_actual = datetime.now()
-        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-            hora_actual.second)+str(".png")
-        ruta = str(os.getcwd()) + "/Screenshot/"
-        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
         Mensaje= "No se pudo iniciar sesion, datos de ingreso incorrectos, problemas con el servicio de bancolombia o usuario bloqueado, <strong> EL SERVICIO SE REINICIARA EN 15 MINUTOS </strong>"
         logging.error(Mensaje)
-        EnvioCorreo(Mensaje, ruta,folio_number)
+        EnvioCorreo(Mensaje, driver)
         driver.close()
         time.sleep(900)
         main()
@@ -148,7 +121,6 @@ def main():
             driver.switch_to.frame(0)
             WebDriverWait(driver, 80).until(EC.element_to_be_clickable((By.ID, "el1"))).click()
             # Pasos para llegar a la tabla donde se encuentran las cuentas
-            #driver.switch_to.frame(0)
             element = driver.find_element(By.ID, 'el1')
             actions = ActionChains(driver)
             actions.move_to_element(element).perform()
@@ -158,87 +130,69 @@ def main():
             logging.info("INGRESO AL LISTADO DE CUENTAS...")
 
         except NoSuchElementException:
-            # Concatena hora y fecha para  Tomar captura de pantalla
-            hoy = date.today()
-            hora_actual = datetime.now()
-            folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-                hora_actual.second) + str(".png")
-            ruta = str(os.getcwd()) + "/Screenshot/"
-            driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
+            Mensaje = "No se pudo desplegar el menu despues del inicio de sesion, SE REINICIA EL SERVICIO"
+            EnvioCorreo(Mensaje, driver)
             logging.error("No se pudo desplegar el menu despues del inicio de sesion, SE REINICIA EL SERVICIO")
             driver.get(os.getenv('CERRAR_SESION'))
             time.sleep(2)
-            EnvioCorreo("No se pudo desplegar el menu despues del inicio de sesion, SE REINICIA EL SERVICIO", ruta,folio_number)
             driver.close()
             main()
 
         # conexion REDIS
         try:
-            rx = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'))
+            #rx = redis.Redis(host=os.getenv('REDIS_HOST'), port=os.getenv('REDIS_PORT'), db=os.getenv('REDIS_DB'))
             # Hilo que hace movimientos en la pantalla para evitar cerrra sesion
             # Variable para romper el hilo
             # 1. se elimina la variable para evitar problemas de comunicacion
+
             rx.delete('Stop_hilo')
             # 2. se crea la variable
             rx.set('Stop_hilo', 0)
         except:
-            # Concatena hora y fecha para  Tomar captura de pantalla
-            hoy = date.today()
-            hora_actual = datetime.now()
-            folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-                hora_actual.second) + str(".png")
-            ruta = str(os.getcwd()) + "/Screenshot/"
-            driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
             logging.error("No se puede establecer una conexión ya que el equipo de destino denegó expresamente dicha conexión.")
-            EnvioCorreo("Redis: No se puede establecer una conexión ya que el equipo de destino denegó expresamente dicha conexión.", ruta,folio_number)
+            Mensaje = "Redis: No se puede establecer una conexión ya que el equipo de destino denegó expresamente dicha conexión."
+            EnvioCorreo(Mensaje, driver)
 
         # Se crea Hilo y se inicializa
         Mantener_sesion = threading.Thread(name="Mantener-Sesion", target=MantenerSesion, args=(
-        Select, driver, By, logging, NoSuchWindowException, InvalidSessionIdException, WebDriverException, EnvioCorreo,
-        NoSuchElementException, main))
+        Select, driver, By, logging, NoSuchWindowException, WebDriverException, EnvioCorreo,NoSuchElementException, rx))
         Mantener_sesion.start()
         logging.info("SE INICIA HILO QUE MANTIENE LA SESION ABIERTA")
 
         # Inicia iteraciones con WHILE
         while True:
             TransaccionNueva = rx.get('TransaccionNueva')
-            if TransaccionNueva == None:
-                TransaccionNueva=0
-            elif TransaccionNueva == b'0':
-                TransaccionNueva=0
-            elif TransaccionNueva == b'1':
-                TransaccionNueva = 1
+            if str(TransaccionNueva) == '0':
+                ValidaTransaccionNueva=0
+            else:
+                ValidaTransaccionNueva = 1
 
             #Cuenta la cantidad de trabajos con ESTADO = 1
-            if(TransaccionNueva==0):
-                 #Variable para validar si la lista desplegable donde se encuentran las cuentas existe o se encuentra en otra ventana
-                ExisteLista=0
+            if(ValidaTransaccionNueva==0):
+                # Verificar si existen elementos en este caso lista desplegable
                 try:
-                    driver.find_element(By.NAME, 'accountList')
+                    element = driver.find_elements(By.NAME, 'accountList')
+                    if element:
+                        ExisteLista = 0
+                    else:
+                        ExisteLista = 1
                 except:
                     ExisteLista = 1
+
                 #Valida si se encuentra la lista desblegable donde se seleccionan las cuentas
                 if ExisteLista==0:
                     rx.set('Stop_hilo', 0)
-
                 else:
-                    # Concatena hora y fecha para  Tomar captura de pantalla
-                    hoy = date.today()
-                    hora_actual = datetime.now()
-                    folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-                        hora_actual.second) + str(".png")
-                    ruta = str(os.getcwd()) + "/Screenshot/"
-                    driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
+                    Mensaje = "Error: Hilo que mantiene la sesion abierta no encontro lista de cuentas, SE REINICIA EL SERVICIO"
+                    EnvioCorreo(Mensaje, driver)
                     logging.error("Hilo que mantiene la sesion abierta no encontro lista de cuentas, SE REINICIA EL SERVICIO")
                     rx.set('Stop_hilo', 2)
                     #Funcion que valida si esta corriendo oo no el aplicativo
-                    StatusRun(driver, By, logging, EnvioCorreo, NoSuchElementException, WebDriverException, 2)
+                    StatusRun(driver, By, logging, EnvioCorreo, NoSuchElementException, WebDriverException, 2, rx)
                     driver.get(os.getenv('CERRAR_SESION'))
                     time.sleep(10)
-                    EnvioCorreo("Error: Hilo que mantiene la sesion abierta no encontro lista de cuentas, SE REINICIA EL SERVICIO", ruta,folio_number)
-                    driver.close()
+                    driver.quit()
+                    time.sleep(5)
                     main()
             else:
                 logging.info("Se encontraron transacciones nuevas")
@@ -246,13 +200,16 @@ def main():
                 rx.set('TransaccionNueva',0)
                 try:
                     global MyCursor0
+                    if connection.is_connected():
+                        print("Peticion recibida")
+                    else:
+                        connection.reconnect()
                     MyCursor0 = connection.cursor()
-                    #MyCursor0.autocommit = True
                     MyCursor0.execute("SELECT * FROM trabajo WHERE estado = 1 ")
                     MyResult = MyCursor0.fetchall()
                 except mysql.connector.Error as error:
                     logging.error(error)
-                    print(f"Error: {error}")
+                    print("Error")
                 finally:
                     MyCursor0.close()
 
@@ -262,10 +219,47 @@ def main():
                     nombre_cuenta = str(x[1])
                     ExisteCuenta=1
                     try:
-                        # Despliega la lista donde se encuentran las cuentas
-                        select = Select(driver.find_element(By.NAME, 'accountList'))
-                        Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(nombre_cuenta)
-                        select.select_by_visible_text(str(Nom_cuenta))
+                        dropdown_element = driver.find_element(By.NAME, 'accountList')
+                        selected_value = dropdown_element.get_attribute("value")
+                        value_get = selected_value.split("|")
+                        value_text = value_get[0]
+                        if str(value_text) == nombre_cuenta:
+                            element_list=[]
+                            dropdown_element_0 = driver.find_elements(By.NAME, 'accountList')
+                            for option in dropdown_element_0:
+                                text = option.get_attribute("innerHTML")
+                                pattern = r'value="[^"]*">'   # Expresión regular para buscar texto entre símbolos menor que y mayor que
+                            for match in re.finditer(pattern, text):
+                                cadena = match.group()
+                                cadena_izquierda = cadena.lstrip('value="')
+                                cadena_final = cadena_izquierda.rstrip('">')
+                                value_item = cadena_final.split("|")
+                                text_final = value_item[0]
+                                element_list.append(text_final)
+                            element_list.remove("")
+                            position_elemet = element_list.index(nombre_cuenta)
+                            if position_elemet == len(element_list):
+                                element_to_select = position_elemet- (position_elemet+1)
+                            else:
+                                element_to_select = position_elemet+1
+
+                            select_1 = Select(driver.find_element(By.NAME, 'accountList'))
+                            Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(element_list[element_to_select])
+                            select_1.select_by_visible_text(str(Nom_cuenta))
+                            print("cuenta 1: " + Nom_cuenta)
+                            time.sleep(1)
+                            select_2 = Select(driver.find_element(By.NAME, 'accountList'))
+                            print("Nombre cuenta Default: "+str(nombre_cuenta))
+                            Nom_cuenta_1= "BANCOLOMBIA - Ahorros - "+ str(nombre_cuenta)
+                            select_2.select_by_visible_text(str(Nom_cuenta_1))
+                            print("cuenta 2" + Nom_cuenta_1)
+
+                        else:
+                            # Despliega la lista donde se encuentran las cuentas
+                            select = Select(driver.find_element(By.NAME, 'accountList'))
+                            Nom_cuenta= "BANCOLOMBIA - Ahorros - "+ str(nombre_cuenta)
+                            select.select_by_visible_text(str(Nom_cuenta))
+
                     except NoSuchElementException:
                         ExisteCuenta = 0
                     except:
@@ -369,19 +363,14 @@ def main():
                                     if str(df.loc[k, "fecha"]).strip() == str(d1).strip():
                                         pos.append(k)
                                         guardar += 1
-                                        print(k)
                             else:
                                 #for k in df["hora"]:
                                 for k, y in zip(df["hora"], df["fecha"]):
                                     result = re.sub('[^0-9:]', '', k)
                                     hora1 = datetime.strptime(result, '%H:%M:%S').time()
                                     hora2 = datetime.strptime(str(result_SQL[0]), '%H:%M:%S').time()
-
                                     today = date.today()
                                     d1 = today.strftime("%Y/%m/%d")
-
-                                    print("Fecha 1: ", str(y).strip())
-                                    print("Fecha 2: ", str(d1).strip())
 
                                     if  hora1 > hora2 and str(y).strip() == str(d1).strip():
                                         guardar += 1
@@ -424,14 +413,14 @@ def main():
                                 id_estado = 4
                                 Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
                                 id_transaccion= str(id_trabajo)
-                                cola_de_trabajo(id_transaccion)
+                                cola_de_trabajo(id_transaccion, rx)
                             else:
                                 #Se actualiza el estado a 1 EXISTEN NUEVOS PAGOS
                                 logging.warning("Se registraron pagos a la cuenta" + str(nombre_cuenta))
                                 id_estado = 2
                                 Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
                                 id_transaccion = str(id_trabajo)
-                                cola_de_trabajo(id_transaccion)
+                                cola_de_trabajo(id_transaccion, rx)
 
                         else:
                             # Actualiza el estado del trabajo a ESTADO = 2 para no ser procesado de nuevo
@@ -439,7 +428,7 @@ def main():
                             id_estado = 3
                             Estados_trabajos(connection,logging,mysql,id_trabajo,nombre_cuenta,id_estado)
                             id_transaccion = str(id_trabajo)
-                            cola_de_trabajo(id_transaccion)
+                            cola_de_trabajo(id_transaccion, rx)
 
                         # Se termina de realizar la extraccion de la informacion y se reaunda el Hilo
                         StatusHilo = Mantener_sesion.is_alive()
@@ -447,56 +436,57 @@ def main():
                         rx.set('Stop_hilo', 0)
 
                     else:
-                        # Concatena hora y fecha para  Tomar captura de pantalla
-                        hoy = date.today()
-                        hora_actual = datetime.now()
-                        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(
-                            hora_actual.minute) + "-" + str(
-                            hora_actual.second) + str(".png")
-                        ruta = str(os.getcwd()) + "/Screenshot/"
-                        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
                         logging.warning("El numero de cuenta no existe - " + str(nombre_cuenta))
                         id_estado = 6
                         Estados_trabajos(connection, logging, mysql, id_trabajo, nombre_cuenta, id_estado)
                         id_transaccion = str(x[0])
-                        cola_de_trabajo(id_transaccion)
-                        EnvioCorreo("El numero de cuenta no existe - " + str(nombre_cuenta), ruta,folio_number)
+                        cola_de_trabajo(id_transaccion, rx)
+                        Mensaje = "El numero de cuenta no existe - " + str(nombre_cuenta)
+                        #EnvioCorreo(Mensaje, driver)
                         rx.set('Stop_hilo', 0)
 
     except NoSuchElementException as NSEE:
-        # Concatena hora y fecha para  Tomar captura de pantalla
-        hoy = date.today()
-        hora_actual = datetime.now()
-        folio_number = str(hoy) + "-" + str(hora_actual.hour) + "-" + str(hora_actual.minute) + "-" + str(
-            hora_actual.second)+str(".png")
-        ruta = str(os.getcwd()) + "/Screenshot/"
-        driver.get_screenshot_as_file(os.getcwd() + "/Screenshot/" + str(folio_number))
-
-        logging.error("Problemas al cargar el sitio principal, se reinicia el servicio: "+str(NSEE))
+        Mensaje = "Problemas al cargar el sitio, SE REINICIA EL SERVICIO"
+        EnvioCorreo(Mensaje, driver)
+        logging.error("Problemas al cargar el sitio principal, SE REINICIA EL SERVICIO "+str(NSEE))
         driver.get(os.getenv('CERRAR_SESION'))
         time.sleep(2)
-        EnvioCorreo("Problemas al cargar el sitio, SE REINICIA EL SERVICIO", ruta,folio_number)
         rx.set('Stop_hilo', 2)
         driver.close()
         main()
 
-    except MoveTargetOutOfBoundsException:
-        logging.error("Problemas al desplegar el menu")
-        time.sleep(3)
-        driver.switch_to.frame(0)
-        driver.find_element(By.ID, 'el15').click()
+    except MoveTargetOutOfBoundsException as MTOBE:
+        Mensaje = "Problemas al desplegar el menu, SE REINICIA EL SERVICIO " + str(MTOBE)
+        EnvioCorreo(Mensaje, driver)
+        logging.error("Problemas al desplegar el menu, SE REINICIA EL SERVICIO "+ str(MTOBE))
+        driver.get(os.getenv('CERRAR_SESION'))
+        time.sleep(2)
         rx.set('Stop_hilo', 2)
         driver.close()
+        main()
+
 
     except WebDriverException as WD:
-        #logging.error("Se cerro inesperadamente el navegador "+ str(WD))
-        #driver.close()
-        print(WD)
+        Mensaje = "Se cerro inesperadamente el navegador, SE REINICIA EL SERVICIO "+ str(WD)
+        EnvioCorreo(Mensaje, driver)
+        logging.error("Se cerro inesperadamente el navegador, SE REINICIA EL SERVICIO "+ str(WD))
+        rx.set('Stop_hilo', 2)
+        driver.close()
+        main()
 
     except InvalidSessionIdException as IE:
-        logging.error("Se detuvo el hilo de sesion inesperadamente  " + str(IE))
-        rx.set('Stop_hilo', 0)
+        Mensaje = "Se detuvo el hilo de sesion inesperadamente, SE REINICIA EL SERVICIO " + str(IE)
+        EnvioCorreo(Mensaje, driver)
+        logging.error("Se detuvo el hilo de sesion inesperadamente, SE REINICIA EL SERVICIO " + str(IE))
+        driver.get(os.getenv('CERRAR_SESION'))
+        time.sleep(2)
+        rx.set('Stop_hilo', 2)
+        driver.quit()
+        time.sleep(5)
+        main()
+
+
+
 
 if __name__ =="__main__":
     main()
